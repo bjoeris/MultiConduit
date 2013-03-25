@@ -1,3 +1,5 @@
+{-# LANGUAGE Rank2Types #-}
+
 module Main where
 
 
@@ -35,6 +37,36 @@ bar = do
             yield (Right n)
             CL.drop n
             foo
+
+fuseOutSimple :: Monad m
+           => Conduit a (ConduitM i Void m) b
+           -> Conduit b m c
+           -> Conduit a (ConduitM i Void m) c
+fuseOutSimple left right = left =$= transPipe lift right
+
+fuseOutMerge :: Monad m
+             => Conduit a (ConduitM i Void m) b
+             -> Conduit b (ConduitM i Void m) c
+             -> Conduit a (ConduitM i Void m) c
+fuseOutMerge = (=$=)
+
+fuseOutAdd :: Monad m
+           => Conduit a (ConduitM i1 Void m) b
+           -> Conduit b (ConduitM i2 Void m) c
+           -> Conduit a (ConduitM i1 Void (ConduitM i2 Void m)) c
+fuseOutAdd left right = transPipe (transPipe lift) left =$= transPipe lift right
+
+fuseOutAdd' :: Monad m
+            => Conduit a (ConduitM i1 Void m) b
+            -> Conduit b (ConduitM i2 Void m) c
+            -> Conduit a (ConduitM i2 Void (ConduitM i1 Void m)) c
+fuseOutAdd' left right = transPipe lift left =$= transPipe (transPipe lift) right
+
+fuseOutInner :: Monad m
+             => Conduit a (ConduitM i1 Void m) b
+             -> Conduit i2 (ConduitM b Void m) c
+             -> Conduit i2 (ConduitM a Void (ConduitM i1 Void m)) c
+fuseOutInner left right = fuseInner left (transPipe (transPipe lift) right)
 
 -- | This incorrect implementation of fuse inner resets `left` on each action in the outer conduit.
 --   Therefore, `fuseInner_WRONG (isolate n)` does nothing unless at least `n` values are read

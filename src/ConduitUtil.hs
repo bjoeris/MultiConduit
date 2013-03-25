@@ -52,30 +52,42 @@ lastStepStatefulMorph st mx = do
 class StatefulHoist t where
     statefulHoist :: (Monad m, Monad n) =>
                      StatefulMorph m n ->
-                     t m r -> t n r
+                     StatefulMorph (t m) (t n)
+
+runStatefulMorph :: Monad n => StatefulMorph m n -> m a -> n a
+runStatefulMorph = lastStepStatefulMorph
 
 -- | Instance to allow StatefulMorph in the underlying monad to be hoisted to a transformation of Pipes.
 --   Code based on transPipe.
 instance StatefulHoist (Pipe l i o u) where
-    statefulHoist st (HaveOutput p c o) = HaveOutput (statefulHoist st p) (lastStepStatefulMorph st c) o
-    statefulHoist st (NeedInput p c) = NeedInput (statefulHoist st . p) (statefulHoist st . c)
-    statefulHoist st (Leftover p i) = Leftover (statefulHoist st p) i
-    statefulHoist st (Done r) = lift (finalizeStatefulMorph st) >> return r
-    statefulHoist st (PipeM mp) = PipeM np where
-        np = do
-            (st',p') <- stepStatefulMorph st mp
-            return $ statefulHoist st' p'
+    statefulHoist st0 = StatefulMorph (step st0) (return ())
+      where
+        step :: Monad n => StatefulMorph m n -> Pipe l i o u m r -> Pipe l i o u n (StatefulMorph (Pipe l i o u m) (Pipe l i o u n), r)
+        step st (HaveOutput p c o) = HaveOutput (step st p) (lastStepStatefulMorph st c) o
+        step st (NeedInput p c) = NeedInput (step st . p) (step st . c)
+        step st (Leftover p i) = Leftover (step st p) i
+        step st (Done r) = return (StatefulMorph (step st) (lift $ finalizeStatefulMorph st), r)
+        step st (PipeM mp) = PipeM np where
+            np = do
+                (st',p') <- stepStatefulMorph st mp
+                return $ step st' p'
 
 -- | Instance to allow StatefulMorph in the underlying monad to be hoisted to a transformation of Conduits.
 instance StatefulHoist (ConduitM i o) where
-    statefulHoist st (ConduitM p) = ConduitM $ statefulHoist st p
+    statefulHoist st = makeStateful ConduitM `composeStateful` statefulHoist st `composeStateful` makeStateful unConduitM
 
 -- | fuses a left conduit onto the input of the inner conduit
 fuseInner :: Monad m
           => Conduit a m b
           -> ConduitM i o (ConduitM b c m) r
           -> ConduitM i o (ConduitM a c m) r
-fuseInner left = statefulHoist (fuseStateful left)
+fuseInner = runStatefulMorph . statefulHoist . fuseStateful
+
+fuseInnerInner :: Monad m
+               => ConduitM a b m ()
+               -> ConduitM i1 o (ConduitM i2 Void (ConduitM b Void m)) ()
+               -> ConduitM i1 o (ConduitM i2 Void (ConduitM a Void m)) ()
+fuseInnerInner = runStatefulMorph . statefulHoist . statefulHoist . fuseStateful
 
 -- | stateful version of (=$=)
 fuseStateful :: Monad m
